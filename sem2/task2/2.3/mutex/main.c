@@ -54,9 +54,24 @@ void *counter(void *arg) {
 
       int diff = strlen(curr->value) - strlen(next->value);
       switch (type) {
-        case LESS:    if (diff < 0) atomic_fetch_add(&asc_counter, 1); atomic_fetch_add(&asc_iter, 1); break;
-        case GREATER: if (diff > 0) atomic_fetch_add(&desc_counter, 1); atomic_fetch_add(&desc_iter, 1); break;
-        case EQUAL:   if (diff == 0) atomic_fetch_add(&eq_counter, 1); atomic_fetch_add(&eq_iter, 1); break;
+        case LESS: 
+          if (diff < 0) {
+            atomic_fetch_add(&asc_counter, 1);
+          } 
+          atomic_fetch_add(&asc_iter, 1);
+          break;
+        case GREATER: 
+          if (diff > 0) {
+            atomic_fetch_add(&desc_counter, 1);
+          } 
+          atomic_fetch_add(&desc_iter, 1);
+          break;
+        case EQUAL: 
+          if (diff == 0) {
+            atomic_fetch_add(&eq_counter, 1);
+          } 
+          atomic_fetch_add(&eq_iter, 1);
+          break;
       }
 
       pthread_mutex_unlock(&curr->mutex);

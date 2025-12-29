@@ -10,9 +10,14 @@ typedef enum mutex_state {
   MUTEX_DESTROYED = -1
 } mutex_state;
 
+enum {
+  SUCCESS = 0,
+  FAILURE = 1
+};
+
 typedef struct my_mutex {
   atomic_int state;
-  pid_t owner;
+  atomic_int owner;
 } my_mutex_t;
 
 int my_mutex_init(my_mutex_t *mutex);

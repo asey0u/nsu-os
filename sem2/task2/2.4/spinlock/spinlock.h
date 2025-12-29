@@ -10,6 +10,11 @@ typedef enum spinlock_state {
   SPINLOCK_DESTROY
 } spinlock_state;
 
+enum {
+  SUCCESS = 0,
+  FAILURE = 1
+};
+
 typedef struct my_spinlock {
   atomic_int state;
 } my_spinlock_t;

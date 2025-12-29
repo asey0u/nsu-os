@@ -4,37 +4,35 @@
 #include <unistd.h>
 
 int my_spinlock_init(my_spinlock_t *spinlock) {
-  if (spinlock == NULL) return 0;
+  if (spinlock == NULL) return FAILURE;
 
   atomic_init(&spinlock->state, SPINLOCK_FREE);
 
-  return 1;
+  return SUCCESS;
 }
 
 int my_spinlock_lock(my_spinlock_t *spinlock) {
-  if (spinlock == NULL) return 0;
+  if (spinlock == NULL) return FAILURE;
   
   while (1) {
     if (atomic_compare_exchange_strong(&spinlock->state, &(int){SPINLOCK_FREE}, SPINLOCK_LOCKED)) {
-      return 1;
+      return SUCCESS;
     }
   }
-
-  return 1;
 }
 
 int my_spinlock_unlock(my_spinlock_t *spinlock) {
-  if (spinlock == NULL) return 0;
+  if (spinlock == NULL) return FAILURE;
 
   atomic_store(&spinlock->state, SPINLOCK_FREE);
   
-  return 1;
+  return SUCCESS;
 }
 
 int my_spinlock_destroy(my_spinlock_t *spinlock) {
-  if (spinlock == NULL) return 0;
+  if (spinlock == NULL) return FAILURE;
   
   atomic_store(&spinlock->state, SPINLOCK_DESTROY);
 
-  return 0;
+  return SUCCESS;
 }
