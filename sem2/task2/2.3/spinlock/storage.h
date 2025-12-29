@@ -1,5 +1,4 @@
-#ifndef STORAGE_H
-#define STORAGE_H
+#pragma once
 #define _GNU_SOURCE
 
 #include <pthread.h>
@@ -21,5 +20,3 @@ void storage_free(Storage *st);
 void storage_push_back(Storage *st, const char *value);
 int storage_swap(Storage *st, Node *prev, Node *a, Node *b);
 Node *create_node(const char *value);
-
-#endif
