@@ -21,11 +21,6 @@ mythread_t mythread_self(void);
 int mythread_equal(mythread_t t1, mythread_t t2);
 int mythread_join(mythread_t thread, void **retval);
 int mythread_detach(mythread_t thread);
-int mythread_cancel(mythread_t thread);
-void mythread_testcancel(void);
-void mythread_cleanup_push(void (*routine)(void *), void *arg);
-void mythread_cleanup_pop(int execute);
-uint64_t mythread_get_id(mythread_t thread);
 void mythread_yield();
 
 #endif
