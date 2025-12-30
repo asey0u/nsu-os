@@ -128,9 +128,7 @@ static void runtime_init(void) {
   }
 }
 
-int mythread_create(mythread_t *thread,
-                    void *(*start_routine)(void *),
-                    void *arg) {
+int mythread_create(mythread_t *thread, void *(*start_routine)(void *), void *arg) {
   if (!thread || !start_routine)
     return MY_USER_THREAD_FAILURE;
 
@@ -205,6 +203,9 @@ int mythread_join(mythread_t thread, void **retval) {
 }
 
 int mythread_detach(mythread_t thread) {
+  if (!thread || thread->detached || thread->joined) {
+    return MY_USER_THREAD_FAILURE;
+  }
   atomic_store(&thread->detached, 1);
   return MY_USER_THREAD_SUCCESS;
 }
