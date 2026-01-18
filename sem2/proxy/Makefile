@@ -1,12 +1,16 @@
 CC = gcc
-CFLAGS = -std=gnu11 -Wall -Wextra -Iinclude
-LDFLAGS = -lpthread
+CFLAGS ?= -std=gnu11 -Wall -Wextra -Iinclude
+LDFLAGS ?= -lpthread
 
-SRC = src/proxy.c src/cache.c src/thread_funcs.c src/http_parser.c
-OBJ = $(SRC:.c=.o)
+SRCS = src/proxy.c src/cache.c src/thread_funcs.c src/http_parser.c src/list.c src/cache_manager.c
+OBJS = $(SRCS:.c=.o)
 
-proxy: $(SRC)
-	$(CC) $(CFLAGS) $(SRC) -o proxy $(LDFLAGS)
+proxy: $(SRCS)
+	$(CC) $(CFLAGS) $(SRCS) -o proxy $(LDFLAGS)
 
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+.PHONY: clean
 clean:
-	rm -f proxy $(OBJ)
+	rm -f proxy $(OBJS)

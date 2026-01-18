@@ -1,28 +1,38 @@
 #pragma once
+
 #include "config.h"
+#include "list.h"
+#include <pthread.h>
 
-struct cache_entry {
-  char url[1024];
+typedef enum cache_state {
+  LOADING,
+  FINISHED
+} cache_state;
 
+typedef struct cache_entry {
+  char key[MAX_CACHE_KEY_LEN]; // теперь еще не привязываем ключ по которому ищем data именно к url, просто некий key
+  
   char *data;
   size_t size;
   size_t capacity;
-
-  int loading;
-  int finished;
+  
+  cache_state state;
   int refcount;
-
+  
   pthread_mutex_t mutex;
   pthread_cond_t cond;
+} cache_entry_t;
 
-  cache_entry_t *prev;
-  cache_entry_t *next;
-};
+typedef struct cache {
+  list_t lru_list;
+  size_t entry_count;
+  size_t max_entries;
+  pthread_mutex_t mutex;
+} cache_t;
 
-void cache_init(size_t max_size);
-
-cache_entry_t *cache_get(const char *url);
-
-cache_entry_t *cache_create(const char *url);
-
-void cache_release(cache_entry_t *e);
+int cache_init(cache_t *cache, size_t max_entries);
+void cache_destroy(cache_t *cache);
+cache_entry_t *cache_get(cache_t *cache, const char *key);
+cache_entry_t *cache_create(cache_t *cache, const char *key);
+cache_entry_t *cache_get_or_create(cache_t *cache, const char *key, int *need_load);
+void cache_release(cache_t *cache, cache_entry_t *entry);

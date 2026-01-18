@@ -1,90 +1,258 @@
 #include "cache.h"
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <stdio.h>
 
-static cache_entry_t *head = NULL;
-static cache_entry_t *tail = NULL;
-static size_t cache_size = 0;
-static size_t cache_limit = 0;
-
-static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-void cache_init(size_t max_size) {
-  cache_limit = max_size;
+int cache_init(cache_t *cache, size_t max_entries) {
+  if (!cache) {
+    return -1;
+  }
+  
+  list_init(&cache->lru_list);
+  cache->entry_count = 0;
+  cache->max_entries = max_entries;
+  
+  if (pthread_mutex_init(&cache->mutex, NULL) != 0) {
+    perror("pthread_mutex_init");
+    return -1;
+  }
+  
+  return 0;
 }
 
-static void lru_move_front(cache_entry_t *entry) {
-  if (entry == head) return;
-
-  if (entry->prev) entry->prev->next = entry->next;
-  if (entry->next) entry->next->prev = entry->prev;
-  if (entry == tail) tail = entry->prev;
-
-  entry->prev = NULL;
-  entry->next = head;
-  if (head) head->prev = entry;
-  head = entry;
-  if (!tail) tail = entry;
-}
-
-static void lru_delete_last() {
-  while (cache_size > cache_limit && tail && tail->refcount == 0) {
-    cache_entry_t *entry = tail;
-    tail = entry->prev;
-    if (tail) tail->next = NULL;
-    else head = NULL;
+void cache_destroy(cache_t *cache) {
+  if (!cache) {
+    return;
+  }
+  
+  if (pthread_mutex_lock(&cache->mutex) != 0) {
+    perror("pthread_mutex_lock");
+    return;
+  }
+  
+  while (!list_is_empty(&cache->lru_list)) {
+    list_node_t *node = list_pop_back(&cache->lru_list);
+    if (!node) {
+      break;
+    }
     
-    cache_size -= entry->capacity;
-    free(entry->data);
+    cache_entry_t *entry = (cache_entry_t *)node->data;
+    
+    if (entry->data) {
+      free(entry->data);
+    }
     pthread_mutex_destroy(&entry->mutex);
     pthread_cond_destroy(&entry->cond);
     free(entry);
+    free(node);
+  }
+  
+  pthread_mutex_unlock(&cache->mutex);
+  pthread_mutex_destroy(&cache->mutex);
+}
+
+static void lru_delete_last(cache_t *cache) {
+  while (cache->entry_count > cache->max_entries && !list_is_empty(&cache->lru_list)) {
+    list_node_t *node = list_back(&cache->lru_list);
+    if (!node) {
+      break;
+    }
+    
+    cache_entry_t *entry = (cache_entry_t *)node->data;
+    
+    if (entry->refcount == 0) {
+      if (entry->data) {
+        free(entry->data);
+      }
+      pthread_mutex_destroy(&entry->mutex);
+      pthread_cond_destroy(&entry->cond);
+      free(entry);
+      
+      list_remove(&cache->lru_list, node);
+      cache->entry_count--;
+    } else {
+      break;
+    }
   }
 }
 
-cache_entry_t *cache_get(const char *url) {
-  pthread_mutex_lock(&cache_mutex);
-  cache_entry_t *entry = head;
-  while (entry) {
-    if (strcmp(entry->url, url) == 0) { // нашли наш кэш по ссылке
+cache_entry_t *cache_get(cache_t *cache, const char *key) {
+  if (!cache || !key) {
+    return NULL;
+  }
+  
+  if (pthread_mutex_lock(&cache->mutex) != 0) {
+    perror("pthread_mutex_lock");
+    return NULL;
+  }
+  
+  list_node_t *node = list_front(&cache->lru_list);
+  while (node != NULL) {
+    cache_entry_t *entry = (cache_entry_t *)node->data;
+    
+    if (entry && strcmp(entry->key, key) == 0) {
       entry->refcount++;
-      lru_move_front(entry); // передвинули в начало списка т.к. будем использовать т.е. он last recently used
-      pthread_mutex_unlock(&cache_mutex);
+      list_move_to_front(&cache->lru_list, node);
+      pthread_mutex_unlock(&cache->mutex);
       return entry;
     }
-    entry = entry->next;
+    
+    node = node->next;
   }
-  pthread_mutex_unlock(&cache_mutex);
+  
+  pthread_mutex_unlock(&cache->mutex);
   return NULL;
 }
 
-cache_entry_t *cache_create(const char *url) {
-  pthread_mutex_lock(&cache_mutex);
-
-  cache_entry_t *entry = calloc(1, sizeof(*entry));
-  strcpy(entry->url, url);
-  entry->capacity = 8192;
-  entry->data = malloc(entry->capacity);
-
-  pthread_mutex_init(&entry->mutex, NULL);
-  pthread_cond_init(&entry->cond, NULL);
-  entry->loading = 1;
+cache_entry_t *cache_create(cache_t *cache, const char *key) {
+  if (!cache || !key) {
+    return NULL;
+  }
+  
+  if (pthread_mutex_lock(&cache->mutex) != 0) {
+    perror("pthread_mutex_lock");
+    return NULL;
+  }
+  
+  cache_entry_t *entry = calloc(1, sizeof(cache_entry_t));
+  if (!entry) {
+    perror("calloc");
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  strncpy(entry->key, key, MAX_CACHE_KEY_LEN - 1);
+  entry->key[MAX_CACHE_KEY_LEN - 1] = '\0';
+  
+  entry->capacity = CACHE_ENTRY_CAPACITY;
+  entry->data = malloc(CACHE_ENTRY_CAPACITY);
+  if (!entry->data) {
+    perror("malloc");
+    free(entry);
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  entry->size = 0;
+  entry->state = LOADING;
   entry->refcount = 1;
-
-  entry->next = head;
-  if (head) head->prev = entry;
-  head = entry;
-  if (!tail) tail = entry;
-
-  cache_size += entry->capacity;
-  lru_delete_last();
-
-  pthread_mutex_unlock(&cache_mutex);
+  
+  if (pthread_mutex_init(&entry->mutex, NULL) != 0) {
+    perror("pthread_mutex_init");
+    free(entry->data);
+    free(entry);
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  if (pthread_cond_init(&entry->cond, NULL) != 0) {
+    perror("pthread_cond_init");
+    pthread_mutex_destroy(&entry->mutex);
+    free(entry->data);
+    free(entry);
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  list_push_front(&cache->lru_list, entry);
+  cache->entry_count++;
+  
+  lru_delete_last(cache);
+  
+  pthread_mutex_unlock(&cache->mutex);
   return entry;
 }
 
-void cache_release(cache_entry_t *entry) {
-  pthread_mutex_lock(&cache_mutex);
-  entry->refcount--;
-  pthread_mutex_unlock(&cache_mutex);
+cache_entry_t *cache_get_or_create(cache_t *cache, const char *key, int *need_load) {
+  if (!cache || !key || !need_load) {
+    return NULL;
+  }
+  
+  *need_load = 0;
+  
+  pthread_mutex_lock(&cache->mutex);
+  
+  list_node_t *node = list_front(&cache->lru_list);
+  while (node != NULL) {
+    cache_entry_t *entry = (cache_entry_t *)node->data;
+    
+    if (entry && strcmp(entry->key, key) == 0) {
+      entry->refcount++;
+      list_move_to_front(&cache->lru_list, node);
+      pthread_mutex_unlock(&cache->mutex);
+      return entry;
+    }
+    
+    node = node->next;
+  }
+  
+  cache_entry_t *entry = calloc(1, sizeof(cache_entry_t));
+  if (!entry) {
+    perror("calloc");
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  strncpy(entry->key, key, MAX_CACHE_KEY_LEN - 1);
+  entry->key[MAX_CACHE_KEY_LEN - 1] = '\0';
+  
+  entry->capacity = CACHE_ENTRY_CAPACITY;
+  entry->data = malloc(entry->capacity);
+  if (!entry->data) {
+    perror("malloc");
+    free(entry);
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  entry->size = 0;
+  entry->state = LOADING;
+  entry->refcount = 1;
+  
+  if (pthread_mutex_init(&entry->mutex, NULL) != 0) {
+    perror("pthread_mutex_init");
+    free(entry->data);
+    free(entry);
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  if (pthread_cond_init(&entry->cond, NULL) != 0) {
+    perror("pthread_cond_init");
+    pthread_mutex_destroy(&entry->mutex);
+    free(entry->data);
+    free(entry);
+    pthread_mutex_unlock(&cache->mutex);
+    return NULL;
+  }
+  
+  list_push_front(&cache->lru_list, entry);
+  cache->entry_count++;
+  
+  lru_delete_last(cache);
+  
+  *need_load = 1;
+  
+  pthread_mutex_unlock(&cache->mutex);
+  
+  return entry;
+}
+
+
+void cache_release(cache_t *cache, cache_entry_t *entry) {
+  if (!cache || !entry) {
+    return;
+  }
+  
+  if (pthread_mutex_lock(&cache->mutex) != 0) {
+    perror("pthread_mutex_lock");
+    return;
+  }
+  
+  if (entry->refcount > 0) {
+    entry->refcount--;
+  }
+  
+  pthread_mutex_unlock(&cache->mutex);
 }

@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,28 +14,34 @@
 
 #include "cache.h"
 #include "thread_funcs.h"
-#include "config.h"
+#include "cache_manager.h"
 
-static int listen_fd = -1;
+static volatile sig_atomic_t shutdown_flag = 0;
 
 static void handle_sigint(int signo) {
   (void)signo;
-  if (listen_fd != -1) {
-    close(listen_fd);
-  }
-  fprintf(stderr, "\nProxy terminated\n");
-  exit(0);
+  shutdown_flag = 1;
 }
 
 int main(void) {
-  signal(SIGINT, handle_sigint);
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = handle_sigint;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
 
-  cache_init(CACHE_MAX_SIZE);
+  cache_t cache;
+  cache_init(&cache, CACHE_MAX_ENTRIES);
 
-  listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  cache_manager_t manager;
+  cache_manager_init(&manager, &cache);
+
+  int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd < 0) {
     perror("socket");
-    exit(1);
+    return 1;
   }
 
   int opt = 1;
@@ -48,36 +56,55 @@ int main(void) {
   if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("bind");
     close(listen_fd);
-    exit(1);
+    return 1;
   }
 
-  if (listen(listen_fd, 128) < 0) {
+  if (listen(listen_fd, MAX_CONNECTIONS_REQUESTS) < 0) {
     perror("listen");
     close(listen_fd);
-    exit(1);
+    return 1;
   }
 
   printf("HTTP proxy listening on port %d\n", ntohs(addr.sin_port));
 
-  while (1) { // main busy-wait loop
+  while (!shutdown_flag) {
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
 
     int client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
     if (client_fd < 0) {
+      if (errno == EINTR && shutdown_flag) {
+        break;
+      }
       perror("accept");
       continue;
     }
 
+    client_thread_arg_t *arg = malloc(sizeof(client_thread_arg_t));
+    if (!arg) {
+      perror("malloc");
+      close(client_fd);
+      continue;
+    }
+
+    arg->client_fd = client_fd;
+    arg->manager = &manager;
+
     pthread_t tid;
-    if (pthread_create(&tid, NULL, client_thread, (void *)(intptr_t)client_fd) != 0) {
+    if (pthread_create(&tid, NULL, client_thread, arg) != 0) {
       perror("pthread_create");
       close(client_fd);
+      free(arg);
       continue;
     }
 
     pthread_detach(tid);
   }
+
+  close(listen_fd);
+  cache_manager_destroy(&manager);
+  cache_destroy(&cache);
+  fprintf(stderr, "\nProxy terminated\n");
 
   return 0;
 }

@@ -7,8 +7,13 @@
 
 #include "http_parser.h"
 
+#define HTTP_REQUEST_SIZE 2048
+#define HOST_SIZE 256
+#define PATH_SIZE 1024
 #define BUF_SIZE 4096
 #define MAX_URL_LEN 1024
-#define CACHE_MAX_SIZE 10 * 1024 * 1024
 
-typedef struct cache_entry cache_entry_t;
+#define MAX_CACHE_KEY_LEN 1024
+#define CACHE_ENTRY_CAPACITY 8192
+#define CACHE_MAX_ENTRIES 20
+#define MAX_CONNECTIONS_REQUESTS 128
