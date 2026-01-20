@@ -177,7 +177,7 @@ void *client_thread(void *arg) {
   
   pthread_mutex_unlock(&entry->mutex);
 
-  printf("[CLIENT] Sent %zu bytes\n", sent);
+  fprintf(stderr, "[CLIENT] Sent %zu bytes\n", sent);
 
   cache_release(manager->cache, entry);
   close(client_fd);
