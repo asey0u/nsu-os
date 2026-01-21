@@ -84,43 +84,77 @@ void *counter(void *arg) {
   return NULL;
 }
 
-static void swap_nodes(Node **ptr_to_new_b, Node *a, Node *b) {
-  atomic_fetch_add(&swap_counter, 1);
-  *ptr_to_new_b = b;
-  a->next = b->next;
-  b->next = a;
-}
-
 void *swapper(void *arg) {
   Storage *st = (Storage*)arg;
 
   while (1) {
     pthread_rwlock_rdlock(&st->rwlock);
-    pthread_rwlock_wrlock(&st->first->rwlock);
-    Node* prev = st->first;
+    Node *prev = st->first;
+    if (!prev) {
+      pthread_rwlock_unlock(&st->rwlock);
+      continue;
+    }
+    pthread_rwlock_rdlock(&prev->rwlock);
     pthread_rwlock_unlock(&st->rwlock);
-    Node* curr = NULL;
-    Node* next = NULL;
-      
-    while (prev->next != NULL) {
-      pthread_rwlock_wrlock(&prev->next->rwlock);
-      curr = prev->next;
-      if (curr->next != NULL) {
-        pthread_rwlock_wrlock(&curr->next->rwlock);
-        next = curr->next;
-        if (rand() % 3 == 0) { 
-          prev->next = next;
-          curr->next = next->next;
-          next->next = curr;
-          atomic_fetch_add(&swap_counter, 1);
-        }
-        pthread_rwlock_unlock(&next->rwlock);
+
+    int conflict = 0;
+
+    while (prev->next && !conflict) {
+      Node *curr = prev->next;
+      pthread_rwlock_rdlock(&curr->rwlock);
+
+      if (!curr->next) {
+        pthread_rwlock_unlock(&prev->rwlock);
+        prev = curr;
+        continue;
       }
+
+      if (rand() % 3 != 0) {
+        pthread_rwlock_unlock(&prev->rwlock);
+        prev = curr;
+        continue;
+      }
+
+      Node *next = curr->next;
+      pthread_rwlock_rdlock(&next->rwlock);
+
+      pthread_rwlock_unlock(&next->rwlock);
+      pthread_rwlock_unlock(&curr->rwlock);
       pthread_rwlock_unlock(&prev->rwlock);
-      prev = curr;
+
+      pthread_rwlock_wrlock(&prev->rwlock);
+      if (prev->next != curr) {
+        pthread_rwlock_unlock(&prev->rwlock);
+        conflict = 1;
+        break;
+      }
+
+      pthread_rwlock_wrlock(&curr->rwlock);
+      if (curr->next != next) {
+        pthread_rwlock_unlock(&curr->rwlock);
+        pthread_rwlock_unlock(&prev->rwlock);
+        conflict = 1;
+        break;
+      }
+
+      pthread_rwlock_wrlock(&next->rwlock);
+
+      prev->next = next;
+      curr->next = next->next;
+      next->next = curr;
+      atomic_fetch_add(&swap_counter, 1);
+
+      pthread_rwlock_unlock(&next->rwlock);
+      pthread_rwlock_unlock(&curr->rwlock);
+      pthread_rwlock_unlock(&prev->rwlock);
+
+      pthread_rwlock_rdlock(&next->rwlock);
+      prev = next;
     }
 
-    pthread_rwlock_unlock(&prev->rwlock);
+    if (!conflict) {
+      pthread_rwlock_unlock(&prev->rwlock);
+    }
   }
 
   return NULL;
